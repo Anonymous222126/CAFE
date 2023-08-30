@@ -421,6 +421,13 @@ class DLRM_Net(nn.Module):
                     torch.Tensor(hotn, m_spa),
                     requires_grad=True,
                 )
+                self.register_buffer('sketch_buffer', torch.zeros(hotn * 12, dtype = torch.int32, device = 'cpu'))
+                init = lib.init
+                init.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_void_p]
+                init.restype = None
+                numpy_array = self.sketch_buffer.numpy()
+                data_ptr = numpy_array.ctypes.data_as(ctypes.POINTER(ctypes.c_int))
+                init(hotn, args.sketch_threshold, data_ptr)
 
             self.sketch_emb = np.zeros(26)
             # nn.init.uniform_(self.weight_high, np.sqrt(1 / 10000000))
@@ -458,6 +465,59 @@ class DLRM_Net(nn.Module):
                 sys.exit(
                     "ERROR: --loss-function=" + self.loss_function + " is not supported"
                 )
+
+    def _apply(self, fn):
+        for module in self.children():
+            module._apply(fn)
+
+        def compute_should_use_set_data(tensor, tensor_applied):
+            if torch._has_compatible_shallow_copy_type(tensor, tensor_applied):
+                # If the new tensor has compatible tensor type as the existing tensor,
+                # the current behavior is to change the tensor in-place using `.data =`,
+                # and the future behavior is to overwrite the existing tensor. However,
+                # changing the current behavior is a BC-breaking change, and we want it
+                # to happen in future releases. So for now we introduce the
+                # `torch.__future__.get_overwrite_module_params_on_conversion()`
+                # global flag to let the user control whether they want the future
+                # behavior of overwriting the existing tensor or not.
+                return not torch.__future__.get_overwrite_module_params_on_conversion()
+            else:
+                return False
+
+        for key, param in self._parameters.items():
+            if param is None:
+                continue
+            # Tensors stored in modules are graph leaves, and we don't want to
+            # track autograd history of `param_applied`, so we have to use
+            # `with torch.no_grad():`
+            with torch.no_grad():
+                param_applied = fn(param)
+            should_use_set_data = compute_should_use_set_data(param, param_applied)
+            if should_use_set_data:
+                param.data = param_applied
+                out_param = param
+            else:
+                assert isinstance(param, Parameter)
+                assert param.is_leaf
+                out_param = Parameter(param_applied, param.requires_grad)
+                self._parameters[key] = out_param
+
+            if param.grad is not None:
+                with torch.no_grad():
+                    grad_applied = fn(param.grad)
+                should_use_set_data = compute_should_use_set_data(param.grad, grad_applied)
+                if should_use_set_data:
+                    assert out_param.grad is not None
+                    out_param.grad.data = grad_applied
+                else:
+                    assert param.grad.is_leaf
+                    out_param.grad = grad_applied.requires_grad_(param.grad.requires_grad)
+
+        for key, buf in self._buffers.items():
+            if buf is not None and key != "sketch_buffer":
+                self._buffers[key] = fn(buf)
+
+        return self
 
     def apply_mlp(self, x, layers):
         # approach 1: use ModuleList
@@ -1223,10 +1283,6 @@ def run():
     if args.sketch_flag:
         os.system("g++ -fPIC -shared -o tricks/sklib.so -O3 tricks/sketch.cpp")
         lib = ctypes.CDLL('./tricks/sklib.so')
-        init = lib.init
-        init.argtypes = [ctypes.c_int, ctypes.c_int]
-        init.restype = None
-        init(hotn, args.sketch_threshold)
     global dlrm
     dlrm = DLRM_Net(
         args.compress_rate,
@@ -1333,6 +1389,8 @@ def run():
             ld_model = torch.load(
                 args.load_model, map_location=torch.device("cpu"))
         dlrm.load_state_dict(ld_model["state_dict"])
+        if args.sketch_flag:
+            dlrm.lib.update()
         ld_j = ld_model["iter"]
         ld_k = ld_model["epoch"]
         ld_nepochs = ld_model["nepochs"]
@@ -1476,8 +1534,8 @@ def run():
                         #     if grad_num == 26:
                         #         break
 
-                        # if args.sketch_flag:
-                        #     dlrm.insert_grad(lS_i)
+                        if args.sketch_flag:
+                            dlrm.insert_grad(lS_i)
                         if args.ada_flag:
                             dlrm.insert_adagrad(lS_i)
                         # optimizer

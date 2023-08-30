@@ -31,33 +31,32 @@ extern "C" {
         int Threshold;
         double tot;
         double p, x, y;
+        void* addr;
         struct Bucket{
             uint32_t val[4];
             float cnt[4];
             int dic[4];
-            double sum;
         }*bucket;
         uint32_t Hash(uint32_t val) {
             return (val % s + s) % s;
         }
     public:
-        vector<uint32_t> Top_K;
         queue<uint32_t> hot_id;
         
-        SS(int k = 200, int lim = 130670): k(k), lim(lim) {
+        SS(int k = 200, int lim = 130670, void* addr = NULL): k(k), lim(lim) {
             Threshold = k;
             s = lim;
             tot = 0;
             num = 0;
             printf("size: %d\n", s);
-            bucket = new Bucket [s];
+            if (addr == NULL) return;
+            bucket = new(addr) Bucket [s];
             n = 0;
             x = 0.25;
             y = 0.25;
             for (int i = 1; i < lim; ++i)
                 hot_id.push(i);
             for (int i = 0; i < s; ++i) {
-                bucket[i].sum = 0;
                 memset(bucket[i].cnt, 0, sizeof(bucket[i].cnt));
                 memset(bucket[i].dic, 0, sizeof(bucket[i].dic));
             }
@@ -71,16 +70,27 @@ extern "C" {
             }
             return val;
         }
-        void check(uint32_t val) {
-            int key = Hash(val);
-            for (int i = 0; i < 4; ++i) {
-                if (bucket[key].cnt[i] && bucket[key].dic[i]) {
-                    if (bucket[key].cnt[i] < bucket[key].sum * y) {
-                        hot_id.push(bucket[key].dic[i]);
-                        bucket[key].dic[i] = 0;
-                    }
+        void print() {
+            for (int key = 0; key < s; ++key) {
+                for (int i = 0; i < 4; ++i) {
+                    cout << bucket[key].val[i] << " " << bucket[key].cnt[i] << " " << bucket[key].dic[i] << endl;
                 }
             }
+        }
+        void update() {
+            while(!hot_id.empty()) hot_id.pop();
+            bool *v = new bool[s];
+            memset(v, 0, sizeof(v));
+            for (int key = 0; key < s; ++key) {
+                for (int i = 0; i < 4; ++i) {
+                    if (bucket[key].dic[i])
+                        v[bucket[key].dic[i]] = true;
+                }
+            }
+            for (int i = 1; i < lim; ++i) {
+                if (!v[i]) hot_id.push(i);
+            }
+            delete[] v;
         }
         void decay() {
             printf("decay: hot_nums: %d, tot: %lf %lld\n", num, tot, 1ll * s * k);
@@ -101,9 +111,8 @@ extern "C" {
             for (int i = 0; i < 4; ++i) {
                 if (bucket[key].cnt[i] && bucket[key].val[i] == val) {
                     bucket[key].cnt[i] += v;
-                    bucket[key].sum += v;
                     if (bucket[key].cnt[i] >= k && !hot_id.empty() && !bucket[key].dic[i]) {
-                        bucket[key].dic[i] = hot_id.front(), Top_K.push_back(val), id = 1;
+                        bucket[key].dic[i] = hot_id.front(), id = 1;
                         hot_id.pop();
                         //printf("%d %d %d %ld\n", key, val, bucket[key].dic[i], hot_id.size());
                         ++num;
@@ -122,7 +131,6 @@ extern "C" {
             }
             for (int i = 0; i < 4; ++i) {
                 if (bucket[key].cnt[i] == 0) {
-                    bucket[key].sum += v;
                     bucket[key].cnt[i] = v;
                     bucket[key].val[i] = val;
                     return 0;
@@ -131,7 +139,6 @@ extern "C" {
             if (!bucket[key].dic[3]) {
                 bucket[key].cnt[3] += v;
                 bucket[key].val[3] = val;
-                bucket[key].sum += v;
             }
             return 0;
         }
@@ -139,8 +146,6 @@ extern "C" {
             for (int i = 0; i < len; ++i) {
                 que[i] = query(data[i]);
             }
-            // for (int i = 0; i < len; ++i)
-            //    check(data[i]);
             return que;
         }
         int* batch_insert(uint32_t *data, int len) {
@@ -161,51 +166,7 @@ extern "C" {
             }
             return ins;
         }
-        vector<uint32_t> ans(){
-            sort(Top_K.begin(), Top_K.end());
-            Top_K.resize(unique(Top_K.begin(), Top_K.end()) - Top_K.begin());
-            return Top_K;
-        } 
-    }ss;
-    /*
-    void Analyse(vector<uint32_t> ans, vector<uint32_t> pred) {
-        sort(ans.begin(), ans.end());
-        sort(pred.begin(), pred.end());
-        pred.resize(unique(pred.begin(), pred.end()) - pred.begin());
-        ans.resize(unique(ans.begin(), ans.end()) - ans.begin());
-        int ptr = 0, acc = 0;
-        for (auto i : ans) {
-            while(ptr < pred.size() && pred[ptr] < i) ++ptr;
-            if (pred[ptr] == i) ++ acc;
-        }
-        float Acc = 1.0 * acc / pred.size();
-        float Rec = 1.0 * acc / ans.size();
-        printf("answer: %ld  pred: %ld\n", ans.size(), pred.size());
-        printf("Accuracy: %lf  Recall: %lf \n", 
-        Acc, Rec);
-        if (Rec < 0.95) exit(0);
-    }/*
-    void showsketch(uint32_t *data, int sz) {
-        cout << "sz = " << sz << endl;
-        unordered_map<uint32_t, int> mp;
-        Sketch Hash_table = Sketch(sz, Threshold);
-        vector<uint32_t> ans;
-        for (int i = 0; i < sz; ++i) {
-            Hash_table.Insert(data[i]);
-            mp[data[i]] ++;
-            if (mp[data[i]] == Threshold) ans.push_back(data[i]);
-        }
-        Analyse(ans, Hash_table.Top_K);
-    }
-
-    vector<uint32_t> runsketch(uint32_t *data, int sz) {
-        cout << "data = " << sz << endl;
-        Sketch Hash_table = Sketch(sz, Threshold);
-        vector<uint32_t> ans;
-        for (int i = 0; i < sz; ++i)
-            Hash_table.Insert(data[i]);
-        return Hash_table.ans();
-    }*/
+    }*ss;
     float cntm[16384];
     class CUsketch{
     public:
@@ -262,19 +223,26 @@ extern "C" {
     }CU;
     
     int* batch_query(uint32_t *data, int len) {
-        return ss.batch_query(data, len);
+        return ss->batch_query(data, len);
     }
     float* batch_cnt(uint32_t *data, int len) {
         return CU.batch_cnt(data, len);
     }
     int* batch_insert(uint32_t *data, int len) {
-        return ss.batch_insert(data, len);
+        return ss->batch_insert(data, len);
     }
     int* batch_insert_val(uint32_t *data, float *v, int len) {
-        return ss.batch_insert_val(data, v, len);
+        return ss->batch_insert_val(data, v, len);
     }
-    void init(int n, int Threshold){
-        ss = SS(Threshold, n);
+    void update() {
+        ss->update();
+        //ss->print();
+    }
+    void print() {
+        ss->print();
+    }
+    void init(int n, int Threshold, void* addr){
+        ss = new SS(Threshold, n, addr);
     }
 }
 
