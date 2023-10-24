@@ -28,7 +28,24 @@ Our implementation builds upon DLRM repo: https://github.com/facebookresearch/dl
      ./bench/criteo_terabyte.sh
      ```
 
-3. The code provides five methods for generating embedding layers:
+3. The code provides three models to train the dataset:
+   - dlrm:
+
+     ```
+     ./bench/criteo_terabyte.sh
+     ```
+   - wdl:
+
+     ```
+     ./bench/wdl.sh
+     ```
+   - dcn:
+
+     ```
+     ./bench/dcn.sh
+     ```
+
+4. The code provides six methods for generating embedding layers:
 
    - Full embedding with the following script
 
@@ -59,4 +76,8 @@ Our implementation builds upon DLRM repo: https://github.com/facebookresearch/dl
      ```
      ./bench/criteo_terabyte.sh "--ada-flag --compress-rate=0.1"
      ```
+   - MD embedding with the following script
 
+     ```
+     ./bench/criteo_terabyte.sh "--md-flag --compress-rate=0.1"
+     ```

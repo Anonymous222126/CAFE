@@ -1,56 +1,3 @@
-# Copyright (c) Meta Platforms, Inc. and affiliates.
-#
-# This source code is licensed under the MIT license found in the
-# LICENSE file in the root directory of this source tree.
-
-# Description: an implementation of a deep learning recommendation model (DLRM)
-# The model input consists of dense and sparse features. The former is a vector
-# of floating point values. The latter is a list of sparse indices into
-# embedding tables, which consist of vectors of floating point values.
-# The selected vectors are passed to mlp networks denoted by triangles,
-# in some cases the vectors are interacted through operators (Ops).
-#
-# output:
-#                         vector of values
-# model:                        |
-#                              /\
-#                             /__\
-#                               |
-#       _____________________> Op  <___________________
-#     /                         |                      \
-#    /\                        /\                      /\
-#   /__\                      /__\           ...      /__\
-#    |                          |                       |
-#    |                         Op                      Op
-#    |                    ____/__\_____           ____/__\____
-#    |                   |_Emb_|____|__|    ...  |_Emb_|__|___|
-# input:
-# [ dense features ]     [sparse indices] , ..., [sparse indices]
-#
-# More precise definition of model layers:
-# 1) fully connected layers of an mlp
-# z = f(y)
-# y = Wx + b
-#
-# 2) embedding lookup (for a list of sparse indices p=[p1,...,pk])
-# z = Op(e1,...,ek)
-# obtain vectors e1=E[:,p1], ..., ek=E[:,pk]
-#
-# 3) Operator Op can be one of the following
-# Sum(e1,...,ek) = e1 + ... + ek
-# Dot(e1,...,ek) = [e1'e1, ..., e1'ek, ..., ek'e1, ..., ek'ek]
-# Cat(e1,...,ek) = [e1', ..., ek']'
-# where ' denotes transpose operation
-#
-# References:
-# [1] Maxim Naumov, Dheevatsa Mudigere, Hao-Jun Michael Shi, Jianyu Huang,
-# Narayanan Sundaram, Jongsoo Park, Xiaodong Wang, Udit Gupta, Carole-Jean Wu,
-# Alisson G. Azzolini, Dmytro Dzhulgakov, Andrey Mallevich, Ilia Cherniavskii,
-# Yinghai Lu, Raghuraman Krishnamoorthi, Ansha Yu, Volodymyr Kondratenko,
-# Stephanie Pereira, Xianjie Chen, Wenlin Chen, Vijay Rao, Bill Jia, Liang Xiong,
-# Misha Smelyanskiy, "Deep Learning Recommendation Model for Personalization and
-# Recommendation Systems", CoRR, arXiv:1906.00091, 2019
-
 from __future__ import absolute_import, division, print_function, unicode_literals
 
 import argparse
@@ -93,9 +40,9 @@ import random
 
 # quotient-remainder trick
 from tricks.qr_embedding_bag import QREmbeddingBag
-from tricks.sk_embedding_bag import SKEmbeddingBag
 from tricks.md_embedding_bag import PrEmbeddingBag
 from tricks.md_embedding_bag import md_solver
+from tricks.sk_embedding_bag import SKEmbeddingBag
 from tricks.sk_embedding_bag import get_sketch_time
 from tricks.sk_embedding_bag import reset_sketch_time
 from tricks.adaembed import adaEmbeddingBag
@@ -121,7 +68,7 @@ def time_wrap(use_gpu):
     return time.time()
 
 
-def dlrm_wrap(X, lS_o, lS_i, use_gpu, device, ndevices=1, test=False, sk_flag=False):
+def dcn_wrap(X, lS_o, lS_i, use_gpu, device, ndevices=1, test=False, sk_flag=False):
     with record_function("DLRM forward"):
         if use_gpu:  # .cuda()
             # lS_i can be either a list of tensors or a stacked tensor.
@@ -129,9 +76,9 @@ def dlrm_wrap(X, lS_o, lS_i, use_gpu, device, ndevices=1, test=False, sk_flag=Fa
             if ndevices == 1:
                 if sk_flag:
                     if X != None:
-                        return dlrm(X.to(device), lS_o, lS_i, test)
+                        return dcn(X.to(device), lS_o, lS_i, test)
                     else:
-                        return dlrm(None, lS_o, lS_i, test)
+                        return dcn(None, lS_o, lS_i, test)
                 else:
                     lS_i = (
                         [S_i.to(device) for S_i in lS_i]
@@ -144,19 +91,19 @@ def dlrm_wrap(X, lS_o, lS_i, use_gpu, device, ndevices=1, test=False, sk_flag=Fa
                         else lS_o.to(device)
                     )
         if X != None:
-            return dlrm(X.to(device), lS_o, lS_i, test)
+            return dcn(X.to(device), lS_o, lS_i, test)
         else:
-            return dlrm(None, lS_o, lS_i, test)
+            return dcn(None, lS_o, lS_i, test)
 
 
 def loss_fn_wrap(Z, T, use_gpu, device):
     with record_function("DLRM loss compute"):
         if args.loss_function == "mse" or args.loss_function == "bce":
-            return dlrm.loss_fn(Z, T.to(device))
+            return dcn.loss_fn(Z, T.to(device))
         elif args.loss_function == "wbce":
-            loss_ws_ = dlrm.loss_ws[T.data.view(-1).long()
+            loss_ws_ = dcn.loss_ws[T.data.view(-1).long()
                                     ].view_as(T).to(device)
-            loss_fn_ = dlrm.loss_fn(Z, T.to(device))
+            loss_fn_ = dcn.loss_fn(Z, T.to(device))
             loss_sc_ = loss_ws_ * loss_fn_
             return loss_sc_.mean()
 
@@ -208,8 +155,8 @@ class LRPolicyScheduler(_LRScheduler):
         return lr
 
 
-### define dlrm in PyTorch ###
-class DLRM_Net(nn.Module):
+### define dcn in PyTorch ###
+class dcn_Net(nn.Module):
     def create_mlp(self, ln, sigmoid_layer):
         # build MLP layer by layer
         layers = nn.ModuleList()
@@ -382,7 +329,7 @@ class DLRM_Net(nn.Module):
         weighted_pooling=None,
         loss_function="bce",
     ):
-        super(DLRM_Net, self).__init__()
+        super(dcn_Net, self).__init__()
 
         if (
             (m_spa is not None)
@@ -414,7 +361,6 @@ class DLRM_Net(nn.Module):
             self.loss_threshold = loss_threshold
             self.loss_function = loss_function
             self.device = device
-            self.g_time = 0
             if weighted_pooling is not None and weighted_pooling != "fixed":
                 self.weighted_pooling = "learned"
             else:
@@ -461,8 +407,19 @@ class DLRM_Net(nn.Module):
                         self.v_W_l.append(Parameter(w))
                 else:
                     self.v_W_l = w_list
-            self.bot_l = self.create_mlp(ln_bot, sigmoid_bot)
-            self.top_l = self.create_mlp(ln_top, sigmoid_top)
+
+            self.cross_layer_n = 3
+            m_den = 13
+            input_dim = m_spa * len(ln_emb) + m_den
+            ln_top = np.array([input_dim,256,256,256])
+            self.cross_weight = [nn.Parameter(torch.normal(mean=0.0, std=0.0001, 
+                                 requires_grad=True, size=(input_dim, 1), device=self.device))
+                                 for i in range(self.cross_layer_n)]
+            
+            self.cross_biases = [nn.Parameter(torch.zeros(input_dim, device=self.device))
+                                 for i in range(self.cross_layer_n)]
+            self.last_layer = nn.Linear(input_dim+256, 1)
+            self.top_l = self.create_mlp(ln_top, ln_top.size-2)
 
             # quantization
             self.quantize_emb = False
@@ -484,59 +441,6 @@ class DLRM_Net(nn.Module):
                     "ERROR: --loss-function=" + self.loss_function + " is not supported"
                 )
     
-    def _apply(self, fn):
-        for module in self.children():
-            module._apply(fn)
-
-        def compute_should_use_set_data(tensor, tensor_applied):
-            if torch._has_compatible_shallow_copy_type(tensor, tensor_applied):
-                # If the new tensor has compatible tensor type as the existing tensor,
-                # the current behavior is to change the tensor in-place using `.data =`,
-                # and the future behavior is to overwrite the existing tensor. However,
-                # changing the current behavior is a BC-breaking change, and we want it
-                # to happen in future releases. So for now we introduce the
-                # `torch.__future__.get_overwrite_module_params_on_conversion()`
-                # global flag to let the user control whether they want the future
-                # behavior of overwriting the existing tensor or not.
-                return not torch.__future__.get_overwrite_module_params_on_conversion()
-            else:
-                return False
-
-        for key, param in self._parameters.items():
-            if param is None:
-                continue
-            # Tensors stored in modules are graph leaves, and we don't want to
-            # track autograd history of `param_applied`, so we have to use
-            # `with torch.no_grad():`
-            with torch.no_grad():
-                param_applied = fn(param)
-            should_use_set_data = compute_should_use_set_data(param, param_applied)
-            if should_use_set_data:
-                param.data = param_applied
-                out_param = param
-            else:
-                assert isinstance(param, Parameter)
-                assert param.is_leaf
-                out_param = Parameter(param_applied, param.requires_grad)
-                self._parameters[key] = out_param
-
-            if param.grad is not None:
-                with torch.no_grad():
-                    grad_applied = fn(param.grad)
-                should_use_set_data = compute_should_use_set_data(param.grad, grad_applied)
-                if should_use_set_data:
-                    assert out_param.grad is not None
-                    out_param.grad.data = grad_applied
-                else:
-                    assert param.grad.is_leaf
-                    out_param.grad = grad_applied.requires_grad_(param.grad.requires_grad)
-
-        for key, buf in self._buffers.items():
-            if buf is not None and key != "sketch_buffer":
-                self._buffers[key] = fn(buf)
-
-        return self
-
     def _apply(self, fn):
         for module in self.children():
             module._apply(fn)
@@ -668,7 +572,6 @@ class DLRM_Net(nn.Module):
 
         # print(ly)
         return ly
-    
 
     def ada_decay(self):
         self.grad_norm *= 0.8
@@ -679,9 +582,9 @@ class DLRM_Net(nn.Module):
             if self.ada_emb[i]:
                 l = self.f_offset[i]
                 r = self.f_offset[i] + self.ln_emb[i]
-                p = np.percentile(self.grad_norm[l: r], 95)
-                if (p != 0):
-                    new_cnt[l: r] /= p
+                # p = np.percentile(self.grad_norm[l: r], 95)
+                # if (p != 0):
+                #     new_cnt[l: r] /= p
         ind_1 = set(np.argsort(-new_cnt)[:self.hotn])  # all hot features
         ind_2 = set(np.where(self.dic != 0)[0])  # old hot features
         admit_ = np.array(list(ind_1 - ind_2))
@@ -710,7 +613,6 @@ class DLRM_Net(nn.Module):
         evict_ = np.array(list(ind_2 - ind_1))
         lim = cnt[np.argsort(-cnt)[m]]  # all hot features
         if (len(admit_) > m * 0.05):
-            print(f"evict: {len(admit_)}, m: {m}")
             self.ada_rebuild()
 
     def insert_adagrad(self, lS_o):
@@ -722,7 +624,6 @@ class DLRM_Net(nn.Module):
                                      tmp: tmp+N], dim=1, p=2).cpu())
                 np.add.at(self.grad_norm, input +
                           self.f_offset[k], grad_norm / np.sum(grad_norm) * N)
-                # self.grad_norm[input+self.f_offset[k]] += grad_norm / np.sum(grad_norm) * N
                 tmp += N
         self.d_time += 1
         if (self.d_time == 1 or self.d_time % 4096 == 0):
@@ -731,19 +632,16 @@ class DLRM_Net(nn.Module):
             self.ada_decay()
 
     def insert_grad(self, lS_o):
-        N = len(lS_o[0])
         for k, input in enumerate(lS_o):
-            # if self.sketch_emb[k] == True:
-            #     self.emb_l[k].insert_grad(input)
-            grad_norm = np.array(torch.norm(self.emb_l[k].weight.grad._values(), dim = 1,  p = 2).cpu())
-            norm = np.sum(grad_norm)
-            if self.g_time + N < 600000000:
-                self.importance[k][self.g_time: self.g_time + N] = grad_norm * N / norm
+            if self.sketch_emb[k] == True:
+                self.emb_l[k].insert_grad(input)
+            # grad_norm = np.array(torch.norm(self.emb_l[k].weight.grad[input], dim = 1,  p = 2).cpu())
+            # norm = np.sum(grad_norm)
+            # self.grad_norm[input + self.f_offset[k]] += grad_norm * 128 / norm
         # #print(f"sum = {np.sum(self.grad_norm)}")
         # np.save("grad_norm.npy", self.grad_norm)
         # self.grad_norm = np.load("grad_norm.npy")
         # print(f"sum = {sum(self.grad_norm)}")
-        self.g_time += N
 
     #  using quantizing functions from caffe2/aten/src/ATen/native/quantized/cpu
     def quantize_embedding(self, bits):
@@ -807,37 +705,41 @@ class DLRM_Net(nn.Module):
             )
 
         return R
-    
+
     def forward(self, dense_x, lS_o, lS_i, test):
         return self.sequential_forward(dense_x, lS_o, lS_i, test)
 
+    def cross_layer(self, x0, x1, i):
+        x1w = torch.mm(x1, self.cross_weight[i])
+        y = x0 * x1w + self.cross_biases[i]
+        return y
+
+    def apply_cross(self, x0):
+        x1 = x0.clone().to(x0.device)
+        for i in range(self.cross_layer_n):
+            x1 = self.cross_layer(x0, x1, i)
+        return x1
+
     def sequential_forward(self, dense_x, lS_o, lS_i, test):
         # process dense features (using bottom mlp), resulting in a row vector
-        x = self.apply_mlp(dense_x, self.bot_l)
-        # debug prints
-        # print("intermediate")
-        # print(x.detach().cpu().numpy())
 
         # process sparse features(using embeddings), resulting in a list of row vectors
         ly = self.apply_emb(lS_o, lS_i, self.emb_l, self.v_W_l, test)
-        # for y in ly:
-        #     print(y.detach().cpu().numpy())
 
         # interact features (dense and sparse)
-        z = self.interact_features(x, ly)
+        batch_size, d = dense_x.shape
+        ly = torch.cat(ly, dim = 1).view(batch_size, -1)
+
+        z = torch.cat([dense_x, ly], dim = 1)
+        # print(z.shape)
         # print(z.detach().cpu().numpy())
 
         # obtain probability of a click (using top mlp)
-        p = self.apply_mlp(z, self.top_l)
-
-        # clamp output if needed
-        if 0.0 < self.loss_threshold and self.loss_threshold < 1.0:
-            z = torch.clamp(p, min=self.loss_threshold,
-                            max=(1.0 - self.loss_threshold))
-        else:
-            z = p
-
-        return z
+        deep_p = self.apply_mlp(z, self.top_l)
+        cross_p = self.apply_cross(z)
+        last_input = torch.cat([deep_p, cross_p], dim=1)
+        last_output = self.last_layer(last_input)
+        return torch.sigmoid(last_output)
 
 
 def dash_separated_ints(value):
@@ -868,7 +770,7 @@ def dash_separated_floats(value):
 
 def inference(
     args,
-    dlrm,
+    dcn,
     best_acc_test,
     best_auc_test,
     test_ld,
@@ -882,7 +784,6 @@ def inference(
     test_samp = 0
     scores = []
     targets = []
-    
     for i, testBatch in enumerate(test_ld):
         # early exit if nbatches was set by the user and was exceeded
         if nbatches > 0 and i >= nbatches:
@@ -890,8 +791,9 @@ def inference(
         X_test, lS_o_test, lS_i_test, T_test, W_test, CBPP_test = unpack_batch(
             testBatch
         )
+
         # forward pass
-        Z_test = dlrm_wrap(
+        Z_test = dcn_wrap(
             X_test,
             lS_o_test,
             lS_i_test,
@@ -901,6 +803,9 @@ def inference(
             test=test,
             sk_flag=sk_flag,
         )
+        ### gather the distributed results on each rank ###
+        # For some reason it requires explicit sync before all_gather call if
+        # tensor is on GPU memory
         if Z_test.is_cuda:
             torch.cuda.synchronize()
 
@@ -952,7 +857,7 @@ def inference(
         "nepochs": args.nepochs,
         "nbatches": nbatches,
         "nbatches_test": nbatches_test,
-        "state_dict": dlrm.state_dict(),
+        "state_dict": dcn.state_dict(),
         "test_acc": acc_test,
     }
 
@@ -1200,7 +1105,7 @@ def run():
         if args.data_set == 'kaggle' or args.data_set == 'terabyte':
             m_den = 13
             ln_bot[0] = 13
-        if args.data_set == 'avazu' or args.data_set == 'kdd12':
+        if args.data_set == 'avazu':
             m_den = 0
             ln_bot[0] = 0
 
@@ -1228,11 +1133,11 @@ def run():
         hash_rate = args.compress_rate * args.hash_rate
         print(f"hash_rate: {hash_rate}, hotn: {hotn}")
     ln_emb = np.asarray(ln_emb)
-    if args.data_set != 'avazu' and args.data_set != 'kdd12':
+    if args.data_set != 'avazu':
         num_fea = ln_emb.size + 1  # num sparse + num dense features
     else:
         num_fea = ln_emb.size
-    if args.data_set == 'avazu' or args.data_set == 'kdd12':
+    if args.data_set == 'avazu':
         m_den_out = 0
     else:
         m_den_out = ln_bot[ln_bot.size - 1]
@@ -1257,66 +1162,13 @@ def run():
     ln_top = np.fromstring(arch_mlp_top_adjusted, dtype=int, sep="-")
 
     # sanity check: feature sizes and mlp dimensions must match
-    if m_den != ln_bot[0]:
-        sys.exit(
-            "ERROR: arch-dense-feature-size "
-            + str(m_den)
-            + " does not match first dim of bottom mlp "
-            + str(ln_bot[0])
-        )
 
-    if args.qr_flag and args.data_set != 'avazu' and args.data_set != 'kdd12':
-        if args.qr_operation == "concat" and 2 * m_spa != m_den_out:
-            sys.exit(
-                "ERROR: 2 arch-sparse-feature-size "
-                + str(2 * m_spa)
-                + " does not match last dim of bottom mlp "
-                + str(m_den_out)
-                + " (note that the last dim of bottom mlp must be 2x the embedding dim)"
-            )
-        if args.qr_operation != "concat" and m_spa != m_den_out:
-            sys.exit(
-                "ERROR: arch-sparse-feature-size "
-                + str(m_spa)
-                + " does not match last dim of bottom mlp "
-                + str(m_den_out)
-            )
-    else:
-        if m_spa != m_den_out and args.data_set != 'avazu' and args.data_set != 'kdd12':
-            sys.exit(
-                "ERROR: arch-sparse-feature-size "
-                + str(m_spa)
-                + " does not match last dim of bottom mlp "
-                + str(m_den_out)
-            )
-    if num_int != ln_top[0]:
-        sys.exit(
-            "ERROR: # of feature interactions "
-            + str(num_int)
-            + " does not match first dimension of top mlp "
-            + str(ln_top[0])
-        )
 
     # assign mixed dimensions if applicable
     if args.md_flag:
-        l = 0.0001
-        r = 0.5
-        while r - l > 0.0001:
-            mid = (l + r) / 2
-            m_spa_ = md_solver(
-                torch.tensor(ln_emb),
-                mid,  # alpha
-                d0=m_spa,
-                round_dim=args.md_round_dims,
-            ).tolist()
-            cr = sum(m_spa_ * ln_emb) / (np.sum(ln_emb) * m_spa)
-            if cr > args.compress_rate:
-                l = mid
-            else:
-                r = mid
         m_spa = md_solver(
             torch.tensor(ln_emb),
-            r,  # alpha
+            args.md_temperature,  # alpha
             d0=m_spa,
             round_dim=args.md_round_dims,
         ).tolist()
@@ -1386,10 +1238,10 @@ def run():
     # np.random.seed(args.numpy_rand_seed)
     lib = None
     if args.sketch_flag:
-        os.system("g++ -fPIC -shared -o tricks/sklib.so -g -rdynamic -mavx2 -mbmi -mavx512bw -mavx512dq --std=c++17 -O3 -fopenmp tricks/sketch.cpp")
+        os.system("g++ -fPIC -shared -o tricks/sklib.so -O3 tricks/sketch.cpp")
         lib = ctypes.CDLL('./tricks/sklib.so')
-    global dlrm
-    dlrm = DLRM_Net(
+    global dcn
+    dcn = dcn_Net(
         args.compress_rate,
         args.ada_flag,
         lib,
@@ -1418,26 +1270,19 @@ def run():
         loss_function=args.loss_function,
     )
 
-    # test prints
-    if args.debug_mode:
-        print("initial parameters (weights and bias):")
-        for param in dlrm.parameters():
-            print(param.detach().cpu().numpy())
-        # print(dlrm)
-
     if use_gpu:
         # Custom Model-Data Parallel
         # the mlps are replicated and use data parallelism, while
         # the embeddings are distributed and use model parallelism
-        dlrm = dlrm.to(device)  # .cuda()
-        if dlrm.ndevices > 1:
-            dlrm.emb_l, dlrm.v_W_l = dlrm.create_emb(
+        dcn = dcn.to(device)  # .cuda()
+        if dcn.ndevices > 1:
+            dcn.emb_l, dcn.v_W_l = dcn.create_emb(
                 m_spa, ln_emb, args.weighted_pooling
             )
         else:
-            if dlrm.weighted_pooling == "fixed":
-                for k, w in enumerate(dlrm.v_W_l):
-                    dlrm.v_W_l[k] = w.cuda()
+            if dcn.weighted_pooling == "fixed":
+                for k, w in enumerate(dcn.v_W_l):
+                    dcn.v_W_l[k] = w.cuda()
 
     if not args.inference_only:
         if use_gpu and args.optimizer in ["rwsadagrad", "adagrad"]:
@@ -1450,7 +1295,7 @@ def run():
         }
 
         parameters = (
-            dlrm.parameters()
+            dcn.parameters()
         )
         optimizer = opts[args.optimizer](parameters, lr=args.learning_rate)
         lr_scheduler = LRPolicyScheduler(
@@ -1476,7 +1321,7 @@ def run():
     if not (args.load_model == ""):
         print("Loading saved model {}".format(args.load_model))
         if use_gpu:
-            if dlrm.ndevices > 1:
+            if dcn.ndevices > 1:
                 # NOTE: when targeting inference on multiple GPUs,
                 # load the model as is on CPU or GPU, with the move
                 # to multiple GPUs to be done in parallel_forward
@@ -1493,9 +1338,9 @@ def run():
             # when targeting inference on CPU
             ld_model = torch.load(
                 args.load_model, map_location=torch.device("cpu"))
-        dlrm.load_state_dict(ld_model["state_dict"])
+        dcn.load_state_dict(ld_model["state_dict"])
         if args.sketch_flag:
-            dlrm.lib.update()
+            dcn.lib.update()
         ld_j = ld_model["iter"]
         ld_k = ld_model["epoch"]
         ld_nepochs = ld_model["nepochs"]
@@ -1548,11 +1393,11 @@ def run():
                 quantize_dtype = torch.qint8
             else:
                 quantize_dtype = torch.float16
-            dlrm = torch.quantization.quantize_dynamic(
-                dlrm, {torch.nn.Linear}, quantize_dtype
+            dcn = torch.quantization.quantize_dynamic(
+                dcn, {torch.nn.Linear}, quantize_dtype
             )
         if args.quantize_emb_with_bit != 32:
-            dlrm.quantize_embedding(args.quantize_emb_with_bit)
+            dcn.quantize_embedding(args.quantize_emb_with_bit)
             # print(dlrm)
 
     print("time/loss/accuracy (if enabled):")
@@ -1582,9 +1427,7 @@ def run():
 
                     if j < skip_upto_batch:
                         continue
-                    # if (j == 290000):
-                    #     np.save("importance.npy", dlrm.importance)
-                    #     exit(0)
+                    
                     X, lS_o, lS_i, T, W, CBPP = unpack_batch(inputBatch)
                     t3 = t1
                     t1 = time_wrap(use_gpu)
@@ -1597,7 +1440,7 @@ def run():
                     mbs = T.shape[0]
 
                     # forward pass
-                    Z = dlrm_wrap(
+                    Z = dcn_wrap(
                         X,
                         lS_o,
                         lS_i,
@@ -1642,9 +1485,9 @@ def run():
                         #         break
 
                         # if args.sketch_flag:
-                        # dlrm.insert_grad(lS_i)
+                        #     dcn.insert_grad(lS_i)
                         if args.ada_flag:
-                            dlrm.insert_adagrad(lS_i)
+                            dcn.insert_adagrad(lS_i)
                         # optimizer
                         optimizer.step()
                         lr_scheduler.step()
@@ -1701,6 +1544,7 @@ def run():
 
                     if should_test:
                         epoch_num_float = (j + 1) / len(train_ld) + k + 1
+                        # np.save("grad_norm.npy", dlrm.grad_norm)
                         # dlrm.grad_norm = np.load("grad_norm.npy")
                         # print(f"sum = {sum(dlrm.grad_norm)}")
 
@@ -1710,7 +1554,7 @@ def run():
                         )
                         model_metrics_dict, is_best = inference(
                             args,
-                            dlrm,
+                            dcn,
                             best_acc_test,
                             best_auc_test,
                             test_ld,
@@ -1745,7 +1589,7 @@ def run():
             print("Testing for inference only")
             inference(
                 args,
-                dlrm,
+                dcn,
                 best_acc_test,
                 best_auc_test,
                 test_ld,
@@ -1782,7 +1626,7 @@ def run():
     # test prints
     if not args.inference_only and args.debug_mode:
         print("updated parameters (weights and bias):")
-        for param in dlrm.parameters():
+        for param in dcn.parameters():
             print(param.detach().cpu().numpy())
 
     # export the model in onnx
@@ -1851,7 +1695,7 @@ def run():
         print(dynamic_axes)
         # export model
         torch.onnx.export(
-            dlrm,
+            dcn,
             (X_onnx, lS_o_onnx, lS_i_onnx),
             dlrm_pytorch_onnx_file,
             verbose=True,

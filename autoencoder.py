@@ -1,56 +1,3 @@
-# Copyright (c) Meta Platforms, Inc. and affiliates.
-#
-# This source code is licensed under the MIT license found in the
-# LICENSE file in the root directory of this source tree.
-
-# Description: an implementation of a deep learning recommendation model (DLRM)
-# The model input consists of dense and sparse features. The former is a vector
-# of floating point values. The latter is a list of sparse indices into
-# embedding tables, which consist of vectors of floating point values.
-# The selected vectors are passed to mlp networks denoted by triangles,
-# in some cases the vectors are interacted through operators (Ops).
-#
-# output:
-#                         vector of values
-# model:                        |
-#                              /\
-#                             /__\
-#                               |
-#       _____________________> Op  <___________________
-#     /                         |                      \
-#    /\                        /\                      /\
-#   /__\                      /__\           ...      /__\
-#    |                          |                       |
-#    |                         Op                      Op
-#    |                    ____/__\_____           ____/__\____
-#    |                   |_Emb_|____|__|    ...  |_Emb_|__|___|
-# input:
-# [ dense features ]     [sparse indices] , ..., [sparse indices]
-#
-# More precise definition of model layers:
-# 1) fully connected layers of an mlp
-# z = f(y)
-# y = Wx + b
-#
-# 2) embedding lookup (for a list of sparse indices p=[p1,...,pk])
-# z = Op(e1,...,ek)
-# obtain vectors e1=E[:,p1], ..., ek=E[:,pk]
-#
-# 3) Operator Op can be one of the following
-# Sum(e1,...,ek) = e1 + ... + ek
-# Dot(e1,...,ek) = [e1'e1, ..., e1'ek, ..., ek'e1, ..., ek'ek]
-# Cat(e1,...,ek) = [e1', ..., ek']'
-# where ' denotes transpose operation
-#
-# References:
-# [1] Maxim Naumov, Dheevatsa Mudigere, Hao-Jun Michael Shi, Jianyu Huang,
-# Narayanan Sundaram, Jongsoo Park, Xiaodong Wang, Udit Gupta, Carole-Jean Wu,
-# Alisson G. Azzolini, Dmytro Dzhulgakov, Andrey Mallevich, Ilia Cherniavskii,
-# Yinghai Lu, Raghuraman Krishnamoorthi, Ansha Yu, Volodymyr Kondratenko,
-# Stephanie Pereira, Xianjie Chen, Wenlin Chen, Vijay Rao, Bill Jia, Liang Xiong,
-# Misha Smelyanskiy, "Deep Learning Recommendation Model for Personalization and
-# Recommendation Systems", CoRR, arXiv:1906.00091, 2019
-
 from __future__ import absolute_import, division, print_function, unicode_literals
 
 import argparse
@@ -99,6 +46,8 @@ from tricks.md_embedding_bag import md_solver
 from tricks.sk_embedding_bag import get_sketch_time
 from tricks.sk_embedding_bag import reset_sketch_time
 from tricks.adaembed import adaEmbeddingBag
+from tricks.autoencoder import AutoEncoder
+
 
 
 with warnings.catch_warnings():
@@ -258,7 +207,7 @@ class DLRM_Net(nn.Module):
         N = 0
         if self.ada_flag:
             for i in range(0, ln.size):
-                if ln[i] > 2000 * self.compress_rate:
+                if ln[i] > 200:
                     N += ln[i]
             self.dic = np.zeros(N, dtype=np.int32)
             self.hotn = int((N * m * self.compress_rate - N * 2) / m)
@@ -275,82 +224,24 @@ class DLRM_Net(nn.Module):
             n = ln[i]
 
             # construct embedding operator
-            if self.qr_flag and n > self.qr_threshold:
-                EE = QREmbeddingBag(
-                    n,
-                    m,
-                    self.qr_collisions,
-                    operation=self.qr_operation,
-                    mode="sum",
-                    sparse=True,
-                )
-            elif self.md_flag and n > self.md_threshold:
-                base = max(m)
-                _m = m[i] if n > self.md_threshold else base
-                EE = PrEmbeddingBag(n, _m, base)
-                # use np initialization as below for consistency...
-                W = np.random.uniform(
-                    low=-np.sqrt(1 / n), high=np.sqrt(1 / n), size=(n, _m)
-                ).astype(np.float32)
-                EE.embs.weight.data = torch.tensor(W, requires_grad=True)
-            elif self.ada_flag and n > 2000 * self.compress_rate:
-                EE = adaEmbeddingBag(
-                    N,
-                    self.weight,
-                    self.dic,
-                    self.compress_rate,
-                    self.device,
-                    n,
-                    m,
-                )
-                self.ada_emb[i] = True
-                self.f_offset[i] = N
-                N += n
-            elif self.sketch_flag and n > 2000 * self.compress_rate:
-                EE = SKEmbeddingBag(
-                    N,
-                    self.hotn,
-                    self.lib,
-                    self.weight_high,
-                    self.device,
-                    n,
-                    m,
-                    tot_nums,
-                    round(self.hash_rate * n + 0.51),
-                )
-                self.sketch_emb[i] = True
-                N += 1
-            else:
-                if self.md_flag:
-                    EE = nn.EmbeddingBag(n, max(m), mode="sum", sparse=True)
-                else:
-                    EE = nn.EmbeddingBag(n, m, mode="sum", sparse=True)
-                # initialize embeddings
-                # nn.init.uniform_(EE.weight, a=-np.sqrt(1 / n), b=np.sqrt(1 / n))
-                tmp_n = max(n, 5)
-                
-                if self.md_flag:
-                    W = np.random.uniform(
-                        low=-np.sqrt(1 / tmp_n), high=np.sqrt(1 / tmp_n), size=(n, max(m))
-                    ).astype(np.float32)
-                else:
-                    W = np.random.uniform(
-                        low=-np.sqrt(1 / tmp_n), high=np.sqrt(1 / tmp_n), size=(n, m)
-                    ).astype(np.float32)
-                # approach 1
-                EE.weight.data = torch.tensor(W, requires_grad=True)
-                # approach 2
-                # EE.weight.data.copy_(torch.tensor(W))
-                # approach 3
-                # EE.weight = Parameter(torch.tensor(W),requires_grad=True)
+            base = max(m)
+            _m = m[i] if n > self.md_threshold else base
+            EE = AutoEncoder(n, _m, base)
+            # use np initialization as below for consistency...
+            W = np.random.uniform(
+                low=-np.sqrt(1 / n), high=np.sqrt(1 / n), size=(n, _m)
+            ).astype(np.float32)
+            EE.embs.weight.data = torch.tensor(W, requires_grad=True)
             if weighted_pooling is None:
                 v_W_l.append(None)
             else:
                 v_W_l.append(torch.ones(n, dtype=torch.float32))
             emb_l.append(EE)
-            if self.ada_flag == False:
-                self.f_offset[i] = tot_nums
-            tot_nums += n
+            op = torch.optim.SGD((EE.parameters()), lr = 0.1)
+            self.op.append(op)
+            self.LR_P.append(LRPolicyScheduler(
+                op,0,0,0
+            ))
         return emb_l, v_W_l
 
     def __init__(
@@ -414,7 +305,6 @@ class DLRM_Net(nn.Module):
             self.loss_threshold = loss_threshold
             self.loss_function = loss_function
             self.device = device
-            self.g_time = 0
             if weighted_pooling is not None and weighted_pooling != "fixed":
                 self.weighted_pooling = "learned"
             else:
@@ -434,6 +324,8 @@ class DLRM_Net(nn.Module):
             self.hotn = hotn
             self.grad_norm = []
             self.f_offset = np.zeros(self.ln_emb.size, dtype=np.int32)
+            self.op = []
+            self.LR_P = []
             if self.sketch_flag:
                 self.weight_high = Parameter(
                     torch.Tensor(hotn, m_spa),
@@ -450,7 +342,6 @@ class DLRM_Net(nn.Module):
             self.sketch_emb = np.zeros(self.ln_emb.size)
             # nn.init.uniform_(self.weight_high, np.sqrt(1 / 10000000))
             # If running distributed, get local slice of embedding tables
-
             # create operators
             if ndevices <= 1:
                 self.emb_l, w_list = self.create_emb(
@@ -537,59 +428,6 @@ class DLRM_Net(nn.Module):
 
         return self
 
-    def _apply(self, fn):
-        for module in self.children():
-            module._apply(fn)
-
-        def compute_should_use_set_data(tensor, tensor_applied):
-            if torch._has_compatible_shallow_copy_type(tensor, tensor_applied):
-                # If the new tensor has compatible tensor type as the existing tensor,
-                # the current behavior is to change the tensor in-place using `.data =`,
-                # and the future behavior is to overwrite the existing tensor. However,
-                # changing the current behavior is a BC-breaking change, and we want it
-                # to happen in future releases. So for now we introduce the
-                # `torch.__future__.get_overwrite_module_params_on_conversion()`
-                # global flag to let the user control whether they want the future
-                # behavior of overwriting the existing tensor or not.
-                return not torch.__future__.get_overwrite_module_params_on_conversion()
-            else:
-                return False
-
-        for key, param in self._parameters.items():
-            if param is None:
-                continue
-            # Tensors stored in modules are graph leaves, and we don't want to
-            # track autograd history of `param_applied`, so we have to use
-            # `with torch.no_grad():`
-            with torch.no_grad():
-                param_applied = fn(param)
-            should_use_set_data = compute_should_use_set_data(param, param_applied)
-            if should_use_set_data:
-                param.data = param_applied
-                out_param = param
-            else:
-                assert isinstance(param, Parameter)
-                assert param.is_leaf
-                out_param = Parameter(param_applied, param.requires_grad)
-                self._parameters[key] = out_param
-
-            if param.grad is not None:
-                with torch.no_grad():
-                    grad_applied = fn(param.grad)
-                should_use_set_data = compute_should_use_set_data(param.grad, grad_applied)
-                if should_use_set_data:
-                    assert out_param.grad is not None
-                    out_param.grad.data = grad_applied
-                else:
-                    assert param.grad.is_leaf
-                    out_param.grad = grad_applied.requires_grad_(param.grad.requires_grad)
-
-        for key, buf in self._buffers.items():
-            if buf is not None and key != "sketch_buffer":
-                self._buffers[key] = fn(buf)
-
-        return self
-
     def apply_mlp(self, x, layers):
         # approach 1: use ModuleList
         # for layer in layers:
@@ -600,6 +438,31 @@ class DLRM_Net(nn.Module):
             return None
         return layers(x)
 
+    def train_ae(self, lS_o, lS_i):
+        for k, sparse_index_group_batch in enumerate(lS_i):
+            sparse_offset_group_batch = lS_o[k]
+            E = self.emb_l[k]
+            V = E(
+                sparse_index_group_batch.to(self.device),
+                sparse_offset_group_batch.to(self.device),
+                per_sample_weights=None,
+            )
+            V[np.arange(len(lS_o[k])), sparse_index_group_batch] -= 1
+            #print(f"ont_hot: {one_hot.shape} {one_hot}")
+            loss_fn = torch.nn.MSELoss(reduction="mean")
+            loss = torch.sum(torch.pow(V, 2)) / len(lS_o[k])
+            #print(f"loss: {loss}")
+            self.op[k].zero_grad()
+            loss.backward()
+            # for name, parms in self.emb_l[k].named_parameters():
+            #     print('-->name:', name)
+            #     print('-->para:', torch.max(parms), torch.min(parms))
+            #     #print('-->grad_requirs:',parms.requires_grad)
+            #     print('-->grad_value:', parms.grad.shape, parms.grad, parms.grad.indices)
+            self.op[k].step()
+            self.LR_P[k].step()
+            del V
+            
     def apply_emb(self, lS_o, lS_i, emb_l, v_W_l, test):
         # WARNING: notice that we are processing the batch at once. We implicitly
         # assume that the data is laid out such that:
@@ -649,101 +512,18 @@ class DLRM_Net(nn.Module):
                 ly.append(QV)
             else:
                 E = emb_l[k]
-                if (self.sketch_emb[k] == True):
-                    V = E(
-                        sparse_index_group_batch,
-                        sparse_offset_group_batch,
-                        per_sample_weights=per_sample_weights,
-                        test=test,
-                    )
-                else:
 
-                    V = E(
-                        sparse_index_group_batch.to(self.device),
-                        sparse_offset_group_batch.to(self.device),
-                        per_sample_weights=per_sample_weights,
-                    )
+                V = E.get_emb(
+                    sparse_index_group_batch.to(self.device),
+                    sparse_offset_group_batch.to(self.device),
+                    per_sample_weights=per_sample_weights,
+                )
 
                 ly.append(V)
 
         # print(ly)
         return ly
-    
 
-    def ada_decay(self):
-        self.grad_norm *= 0.8
-
-    def ada_rebuild(self):
-        new_cnt = self.grad_norm[:]
-        for i in range(self.ln_emb.size):
-            if self.ada_emb[i]:
-                l = self.f_offset[i]
-                r = self.f_offset[i] + self.ln_emb[i]
-                p = np.percentile(self.grad_norm[l: r], 95)
-                if (p != 0):
-                    new_cnt[l: r] /= p
-        ind_1 = set(np.argsort(-new_cnt)[:self.hotn])  # all hot features
-        ind_2 = set(np.where(self.dic != 0)[0])  # old hot features
-        admit_ = np.array(list(ind_1 - ind_2))
-        evict_ = np.array(list(ind_2 - ind_1))
-        if len(admit_) != len(evict_):
-            if (len(evict_) != 0):
-                print("error")
-                exit(0)
-            self.dic[admit_] = np.arange(1, self.hotn + 1)
-        else:
-            self.dic[admit_] = self.dic[evict_]
-            with torch.no_grad():
-                self.weight[self.dic[admit_]] = 0
-            self.dic[evict_] = 0
-
-    def ada_check(self):
-        N = 1000000
-        sample = random.sample(range(0, len(self.grad_norm)), N)
-        dic = self.dic[sample]
-        cnt = self.grad_norm[sample]
-        m = math.ceil(N * self.hot_rate)
-
-        ind_1 = set(np.argsort(-cnt)[:m])  # all hot features
-        ind_2 = set(np.where(dic != 0)[0])  # old hot features
-        admit_ = np.array(list(ind_1 - ind_2))
-        evict_ = np.array(list(ind_2 - ind_1))
-        lim = cnt[np.argsort(-cnt)[m]]  # all hot features
-        if (len(admit_) > m * 0.05):
-            print(f"evict: {len(admit_)}, m: {m}")
-            self.ada_rebuild()
-
-    def insert_adagrad(self, lS_o):
-        tmp = 0
-        N = len(lS_o[0])
-        for k, input in enumerate(lS_o):
-            if self.ada_emb[k] == True:
-                grad_norm = np.array(torch.norm(self.weight.grad._values()[
-                                     tmp: tmp+N], dim=1, p=2).cpu())
-                np.add.at(self.grad_norm, input +
-                          self.f_offset[k], grad_norm / np.sum(grad_norm) * N)
-                # self.grad_norm[input+self.f_offset[k]] += grad_norm / np.sum(grad_norm) * N
-                tmp += N
-        self.d_time += 1
-        if (self.d_time == 1 or self.d_time % 4096 == 0):
-            self.ada_check()
-        if (self.d_time % 16384 == 0):
-            self.ada_decay()
-
-    def insert_grad(self, lS_o):
-        N = len(lS_o[0])
-        for k, input in enumerate(lS_o):
-            # if self.sketch_emb[k] == True:
-            #     self.emb_l[k].insert_grad(input)
-            grad_norm = np.array(torch.norm(self.emb_l[k].weight.grad._values(), dim = 1,  p = 2).cpu())
-            norm = np.sum(grad_norm)
-            if self.g_time + N < 600000000:
-                self.importance[k][self.g_time: self.g_time + N] = grad_norm * N / norm
-        # #print(f"sum = {np.sum(self.grad_norm)}")
-        # np.save("grad_norm.npy", self.grad_norm)
-        # self.grad_norm = np.load("grad_norm.npy")
-        # print(f"sum = {sum(self.grad_norm)}")
-        self.g_time += N
 
     #  using quantizing functions from caffe2/aten/src/ATen/native/quantized/cpu
     def quantize_embedding(self, bits):
@@ -807,7 +587,7 @@ class DLRM_Net(nn.Module):
             )
 
         return R
-    
+
     def forward(self, dense_x, lS_o, lS_i, test):
         return self.sequential_forward(dense_x, lS_o, lS_i, test)
 
@@ -829,6 +609,7 @@ class DLRM_Net(nn.Module):
 
         # obtain probability of a click (using top mlp)
         p = self.apply_mlp(z, self.top_l)
+        
 
         # clamp output if needed
         if 0.0 < self.loss_threshold and self.loss_threshold < 1.0:
@@ -836,7 +617,6 @@ class DLRM_Net(nn.Module):
                             max=(1.0 - self.loss_threshold))
         else:
             z = p
-
         return z
 
 
@@ -882,7 +662,10 @@ def inference(
     test_samp = 0
     scores = []
     targets = []
-    
+    t1 = 0
+    t2 = 0
+    tot_time = 0
+    L = len(test_ld)
     for i, testBatch in enumerate(test_ld):
         # early exit if nbatches was set by the user and was exceeded
         if nbatches > 0 and i >= nbatches:
@@ -901,6 +684,15 @@ def inference(
             test=test,
             sk_flag=sk_flag,
         )
+        t2 = t1
+        t1 = time_wrap(use_gpu)
+        tot_time += t1 - t2
+        if ((i+1) % 100 == 0):
+            print(f"Finished test it {i+1}/{L}, test time: {tot_time * 10}", flush = True)
+            tot_time = 0
+        ### gather the distributed results on each rank ###
+        # For some reason it requires explicit sync before all_gather call if
+        # tensor is on GPU memory
         if Z_test.is_cuda:
             torch.cuda.synchronize()
 
@@ -1310,7 +1102,7 @@ def run():
                 round_dim=args.md_round_dims,
             ).tolist()
             cr = sum(m_spa_ * ln_emb) / (np.sum(ln_emb) * m_spa)
-            if cr > args.compress_rate:
+            if cr * 2 > args.compress_rate:
                 l = mid
             else:
                 r = mid
@@ -1386,7 +1178,7 @@ def run():
     # np.random.seed(args.numpy_rand_seed)
     lib = None
     if args.sketch_flag:
-        os.system("g++ -fPIC -shared -o tricks/sklib.so -g -rdynamic -mavx2 -mbmi -mavx512bw -mavx512dq --std=c++17 -O3 -fopenmp tricks/sketch.cpp")
+        os.system("g++ -fPIC -shared -o tricks/sklib.so -O3 tricks/sketch.cpp")
         lib = ctypes.CDLL('./tricks/sklib.so')
     global dlrm
     dlrm = DLRM_Net(
@@ -1575,20 +1367,23 @@ def run():
                 t1 = 0
                 t2 = 0
                 t3 = 0
+                l = len(train_ld)
                 for j, inputBatch in enumerate(train_ld):
                     if j == 0 and args.save_onnx:
                         X_onnx, lS_o_onnx, lS_i_onnx, _, _, _ = unpack_batch(
                             inputBatch)
-
+                    # if j == 10:
+                    #     exit(0)
                     if j < skip_upto_batch:
                         continue
-                    # if (j == 290000):
-                    #     np.save("importance.npy", dlrm.importance)
-                    #     exit(0)
                     X, lS_o, lS_i, T, W, CBPP = unpack_batch(inputBatch)
                     t3 = t1
                     t1 = time_wrap(use_gpu)
-
+                    if j < l * 0.00001:
+                        dlrm.train_ae(lS_o.to(device), lS_i.to(device))
+                        if j % 1024 == 0 or j <= 100:
+                            print(f"it: {j+1}/{l}, time: {(t1 - t3)*1000}ms", flush=True)
+                        continue
                     # early exit if nbatches was set by the user and has been exceeded
                     if nbatches > 0 and j >= nbatches:
                         break
@@ -1609,10 +1404,10 @@ def run():
                     )
 
                     # loss
-                    E = loss_fn_wrap(Z, T, use_gpu, device)
+                    # E = loss_fn_wrap(Z, T, use_gpu, device)
 
                     # compute loss and accuracy
-                    L = E.detach().cpu().numpy()  # numpy array
+                    # L = E.detach().cpu().numpy()  # numpy array
                     # training accuracy is not disabled
                     # S = Z.detach().cpu().numpy()  # numpy array
                     # T = T.detach().cpu().numpy()  # numpy array
@@ -1629,7 +1424,7 @@ def run():
                         # (where we do not accumulate gradients across mini-batches)
                         optimizer.zero_grad()
                         # backward pass
-                        E.backward()
+                        # E.backward()
                         # grad_num = 0
                         # grad_offset = 0
                         # for name, parms in dlrm.named_parameters():
@@ -1641,8 +1436,8 @@ def run():
                         #     if grad_num == 26:
                         #         break
 
-                        # if args.sketch_flag:
-                        # dlrm.insert_grad(lS_i)
+                        if args.sketch_flag:
+                            dlrm.insert_grad(lS_i)
                         if args.ada_flag:
                             dlrm.insert_adagrad(lS_i)
                         # optimizer
@@ -1652,7 +1447,7 @@ def run():
                     t2 = time_wrap(use_gpu)
                     total_time += t1 - t3
 
-                    total_loss += L * mbs
+                    # total_loss += L * mbs
                     total_iter += 1
                     total_samp += mbs
 
@@ -1701,6 +1496,7 @@ def run():
 
                     if should_test:
                         epoch_num_float = (j + 1) / len(train_ld) + k + 1
+                        # np.save("grad_norm.npy", dlrm.grad_norm)
                         # dlrm.grad_norm = np.load("grad_norm.npy")
                         # print(f"sum = {sum(dlrm.grad_norm)}")
 
@@ -1869,3 +1665,4 @@ def run():
 
 if __name__ == "__main__":
     run()
+    #profile.run("run()")

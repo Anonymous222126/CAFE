@@ -1,8 +1,4 @@
 #!/bin/bash
-# Copyright (c) Meta Platforms, Inc. and affiliates.
-#
-# This source code is licensed under the MIT license found in the
-# LICENSE file in the root directory of this source tree.
 
 #WARNING: must have compiled PyTorch
 
@@ -21,12 +17,13 @@ python dlrm_s_pytorch.py \
 --arch-mlp-bot="13-512-256-64-16" \
 --arch-mlp-top="512-256-1" \
 --data-generation=dataset \
---data-set=kaggle \
+--data-set=avazu \
 --loss-function=bce \
 --round-targets=True \
 --learning-rate=0.1 \
 --mini-batch-size=128 \
 --print-freq=1024 \
+--test-freq=30000 \
 --print-time \
 --test-mini-batch-size=16384 \
 --test-num-workers=16 \
@@ -34,11 +31,7 @@ python dlrm_s_pytorch.py \
 --dense-path="/path/to/data" \
 --label-path="/path/to/data" \
 --count-path="/path/to/data" \
-$dlrm_extra_option 2>&1 | tee run_kaggle_pt.log
+$dlrm_extra_option 2>&1 | tee avazu.log
 
 echo "done"
 
-# --cat-path="../criteo_kaggle/kaggle_processed_sparse_sep.bin" \
-# --dense-path="../criteo_kaggle/kaggle_processed_dense.bin" \
-# --label-path="../criteo_kaggle/kaggle_processed_label.bin" \
-# --count-path="../criteo_kaggle/kaggle_processed_count.bin" \

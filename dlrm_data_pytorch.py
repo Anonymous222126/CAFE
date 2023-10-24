@@ -16,6 +16,148 @@ from numpy import random as ra
 from torch.utils.data import Dataset
 
 
+class KDD12Dataset:
+    def __init__(
+        self,
+        count,
+        data_cat,
+        data_int,
+        data_T,
+        split,
+        hash_flag,
+        hc_flag,
+        compress_rate,
+        hot_features=None,
+        hash_rate=0.5,
+    ):
+        self.hash_rate = hash_rate
+        self.hash_flag = hash_flag
+        self.hc_flag = hc_flag
+        self.compress_rate = compress_rate
+        self.data_cat = data_cat[split]
+        self.data_T = data_T[split]
+        self.hash_size = np.zeros(11)
+        self.hot_features = hot_features
+        self.counts = np.array(count, dtype=np.int32)
+
+        #print(f"sum: {self.sum_count}")
+        if self.hash_flag:
+            for i in range(11):
+                if self.counts[i] > 2000 * self.compress_rate:
+                    self.counts[i] = int(
+                        math.ceil(self.counts[i] * self.compress_rate))
+                    self.hash_size[i] = self.counts[i]
+        if self.hc_flag:
+            for i in range(11):
+                if self.counts[i] > 2000 * self.compress_rate:
+                    self.hash_size[i] = int(
+                        round(self.counts[i] * self.compress_rate * self.hash_rate + 0.55))
+                    self.counts[i] = int(
+                        self.hash_size[i] + len(self.hot_features[i]))
+        print(f"count: {self.counts}, hash_size: {self.hash_size}")
+
+    def __getitem__(self, index):
+        if isinstance(index, slice):
+            return [
+                self[idx]
+                for idx in range(
+                    index.start or 0, index.stop or len(self), index.step or 1
+                )
+            ]
+        data_c = np.array(self.data_cat[index])
+        #print(f"data_c: {data_c}, {self.sum_count}")
+        if self.hash_flag or self.hc_flag:
+            for i in range(11):
+                if self.hash_flag and self.hash_size[i] != 0:
+                    data_c[i] = data_c[i] % self.hash_size[i]
+                elif self.hc_flag and self.hash_size[i] != 0:
+                    if data_c[i] not in self.hot_features[i]:
+                        data_c[i] = len(self.hot_features[i]) + \
+                            data_c[i] % self.hash_size[i]
+                    else:
+                        data_c[i] = self.hot_features[i][data_c[i]]
+        
+        return (data_c, None, self.data_T[index])
+
+    def __len__(self):
+        return len(self.data_T)
+
+
+class AvazuDataset:
+    def __init__(
+        self,
+        count,
+        data_cat,
+        data_int,
+        data_T,
+        split,
+        hash_flag,
+        hc_flag,
+        compress_rate,
+        hot_features=None,
+        hash_rate=0.5,
+    ):
+        self.hash_rate = hash_rate
+        self.hash_flag = hash_flag
+        self.hc_flag = hc_flag
+        self.compress_rate = compress_rate
+        if (split == 'train'):
+            train_len = 40428967 - 4218938
+            self.data_cat = data_cat[:train_len]
+            self.data_T = data_T[:train_len]
+        if (split == 'test'):
+            train_len = 40428967 - 4218938
+            self.data_cat = data_cat[train_len:]
+            self.data_T = data_T[train_len:]
+        self.hash_size = np.zeros(22)
+        self.hot_features = hot_features
+        self.counts = np.array(count, dtype=np.int32)
+        self.sum_count = np.zeros(22, dtype=np.int32)
+        for i in range(1, 22):
+            self.sum_count[i] = self.counts[i-1] + self.sum_count[i-1]
+        #print(f"sum: {self.sum_count}")
+        if self.hash_flag:
+            for i in range(22):
+                if self.counts[i] > 2000 * self.compress_rate:
+                    self.counts[i] = int(
+                        math.ceil(self.counts[i] * self.compress_rate))
+                    self.hash_size[i] = self.counts[i]
+        if self.hc_flag:
+            for i in range(22):
+                if self.counts[i] > 2000 * self.compress_rate:
+                    self.hash_size[i] = int(
+                        round(self.counts[i] * self.compress_rate * self.hash_rate + 0.55))
+                    self.counts[i] = int(
+                        self.hash_size[i] + len(self.hot_features[i]))
+        print(f"count: {self.counts}, hash_size: {self.hash_size}, len: {len(self.data_T)}")
+
+    def __getitem__(self, index):
+        if isinstance(index, slice):
+            return [
+                self[idx]
+                for idx in range(
+                    index.start or 0, index.stop or len(self), index.step or 1
+                )
+            ]
+        data_c = np.array(self.data_cat[index])
+        #print(f"data_c: {data_c}, {self.sum_count}")
+        data_c -= self.sum_count
+        if self.hash_flag or self.hc_flag:
+            for i in range(22):
+                if self.hash_flag and self.hash_size[i] != 0:
+                    data_c[i] = data_c[i] % self.hash_size[i]
+                elif self.hc_flag and self.hash_size[i] != 0:
+                    if data_c[i] not in self.hot_features[i]:
+                        data_c[i] = len(self.hot_features[i]) + \
+                            data_c[i] % self.hash_size[i]
+                    else:
+                        data_c[i] = self.hot_features[i][data_c[i]]
+        
+        return (data_c, None, self.data_T[index])
+
+    def __len__(self):
+        return len(self.data_T)
+
 class CriteotbDataSet:
     def __init__(
         self,
@@ -189,6 +331,14 @@ class KaggleDataset:
         self.hc_flag = hc_flag
         self.compress_rate = compress_rate
         if (split == 'train'):
+            # special designed dataset
+            # arr = np.arange(45840617)
+            # result = np.array_split(arr, 7)
+            # result = np.concatenate((result[0], result[2], result[4]))
+            # self.data_cat = data_cat[result]
+            # self.data_int = data_int[result]
+            # self.data_T = data_T[result]
+            # print(f"len: {len(result)}")
             train_len = 45840617 * 6 // 7
             self.data_cat = data_cat[:train_len]
             self.data_int = data_int[:train_len]
@@ -198,7 +348,7 @@ class KaggleDataset:
             self.data_cat = data_cat[train_len:]
             self.data_int = data_int[train_len:]
             self.data_T = data_T[train_len:]
-        self.hash_size = np.zeros(26)
+        self.hash_size = np.zeros(26, dtype=np.int32)
         self.hot_features = hot_features
         self.counts = np.array(count, dtype=np.int32)
         if self.hash_flag:
@@ -206,7 +356,7 @@ class KaggleDataset:
                 if self.counts[i] > 2000 * self.compress_rate:
                     self.counts[i] = int(
                         math.ceil(self.counts[i] * self.compress_rate))
-                    self.hash_size[i] = self.counts[i]
+                self.hash_size[i] = self.counts[i]
         if self.hc_flag:
             for i in range(26):
                 if self.counts[i] > 2000 * self.compress_rate:
@@ -226,6 +376,7 @@ class KaggleDataset:
             ]
         data_c = np.array(self.data_cat[index])
         if self.hash_flag or self.hc_flag:
+            # data_c %= self.hash_size
             for i in range(26):
                 if self.hash_flag and self.hash_size[i] != 0:
                     data_c[i] = data_c[i] % self.hash_size[i]
@@ -241,10 +392,24 @@ class KaggleDataset:
         return len(self.data_T)
 
 
+def collate_wrapper_criteo_offset3(list_of_tuples):
+    transposed_data = list(zip(*list_of_tuples))
+    #X_int = torch.tensor(transposed_data[1], dtype=torch.float)
+    X_cat = torch.tensor(np.array(transposed_data[0]), dtype=torch.long)
+    T = torch.tensor(transposed_data[2], dtype=torch.float32).view(-1, 1)
+
+    batchSize = X_cat.shape[0]
+    featureCnt = X_cat.shape[1]
+
+    lS_i = [X_cat[:, i] for i in range(featureCnt)]
+    lS_o = [torch.tensor(range(batchSize)) for _ in range(featureCnt)]
+
+    return None, torch.stack(lS_o), torch.stack(lS_i), T
+
 def collate_wrapper_criteo_offset2(list_of_tuples):
     transposed_data = list(zip(*list_of_tuples))
-    X_int = torch.tensor(transposed_data[1], dtype=torch.float)
-    X_cat = torch.tensor(transposed_data[0], dtype=torch.long)
+    X_int = torch.tensor(np.array(transposed_data[1]), dtype=torch.float)
+    X_cat = torch.tensor(np.array(transposed_data[0]), dtype=torch.long)
     T = torch.tensor(transposed_data[2], dtype=torch.float32).view(-1, 1)
 
     batchSize = X_cat.shape[0]
@@ -338,6 +503,130 @@ def calc_bucket_hot(data, threshold, compress_rate, hash_rate, count):
 
 
 def make_criteo_data_and_loaders(args, offset_to_length_converter=False):
+    if args.data_set == 'kdd12':
+        data_cat = np.memmap(args.cat_path, dtype=np.int32,
+                             mode='r', shape=(149639105, 11))
+        data_T = np.memmap(args.label_path, dtype=np.int32,
+                           mode='r', shape=(149639105,))
+        data_int = None
+        data_count = np.memmap(
+            args.count_path, dtype=np.int32, mode='r', shape=(11,))
+        hot_features = None
+        
+        np.random.seed(2023)
+        tot_len = 149639105
+        index = np.arange(tot_len)
+        np.random.shuffle(index)
+        print(f"index: {index.shape} {index}")
+
+        test_size = int(0.1 * tot_len)
+        train_size = tot_len - test_size
+        test, train = index[:test_size], index[test_size:]
+        print(f"index: {test.shape} {train.shape}")
+        train_data = KDD12Dataset(
+            data_count,
+            data_cat,
+            data_int,
+            data_T,
+            train,
+            args.hash_flag,
+            args.bucket_flag,
+            args.compress_rate,
+            hot_features,
+            args.hash_rate,
+        )
+        test_data = KDD12Dataset(
+            data_count,
+            data_cat,
+            data_int,
+            data_T,
+            test,
+            args.hash_flag,
+            args.bucket_flag,
+            args.compress_rate,
+            hot_features,
+            args.hash_rate,
+        )
+
+        collate_wrapper_criteo = collate_wrapper_criteo_offset3
+        train_loader = torch.utils.data.DataLoader(
+            train_data,
+            batch_size=args.mini_batch_size,
+            shuffle=False,
+            num_workers=args.num_workers,
+            collate_fn=collate_wrapper_criteo,
+            pin_memory=False,
+            drop_last=False,  # True
+        )
+
+        test_loader = torch.utils.data.DataLoader(
+            test_data,
+            batch_size=args.test_mini_batch_size,
+            shuffle=False,
+            num_workers=args.test_num_workers,
+            collate_fn=collate_wrapper_criteo,
+            pin_memory=False,
+            drop_last=False,  # True
+        )
+    if args.data_set == 'avazu':
+        data_cat = np.memmap(args.cat_path, dtype=np.int32,
+                             mode='r', shape=(40428967, 22))
+        data_T = np.memmap(args.label_path, dtype=np.int32,
+                           mode='r', shape=(40428967,))
+        data_int = None
+        data_count = np.memmap(
+            args.count_path, dtype=np.int32, mode='r', shape=(23, ))
+        hot_features = None
+        count = np.array(data_count)
+        new_count = np.zeros(22)
+        for i in range(22):
+            new_count[i] = count[i+1] - count[i]
+
+        train_data = AvazuDataset(
+            new_count,
+            data_cat,
+            data_int,
+            data_T,
+            'train',
+            args.hash_flag,
+            args.bucket_flag,
+            args.compress_rate,
+            hot_features,
+            args.hash_rate,
+        )
+        test_data = AvazuDataset(
+            new_count,
+            data_cat,
+            data_int,
+            data_T,
+            'test',
+            args.hash_flag,
+            args.bucket_flag,
+            args.compress_rate,
+            hot_features,
+            args.hash_rate,
+        )
+
+        collate_wrapper_criteo = collate_wrapper_criteo_offset3
+        train_loader = torch.utils.data.DataLoader(
+            train_data,
+            batch_size=args.mini_batch_size,
+            shuffle=False,
+            num_workers=args.num_workers,
+            collate_fn=collate_wrapper_criteo,
+            pin_memory=False,
+            drop_last=False,  # True
+        )
+
+        test_loader = torch.utils.data.DataLoader(
+            test_data,
+            batch_size=args.test_mini_batch_size,
+            shuffle=False,
+            num_workers=args.test_num_workers,
+            collate_fn=collate_wrapper_criteo,
+            pin_memory=False,
+            drop_last=False,  # True
+        )
     if args.data_set == 'kaggle':
 
         # data_cat = np.memmap("../criteo/new_sparse.bin", dtype = np.int32, mode = 'r', shape=(45840617,26))

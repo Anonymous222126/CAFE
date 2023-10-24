@@ -3,25 +3,6 @@
 using namespace std;
 
 
-vector<uint32_t> loaddata(const char *filename = "../criteo/kaggle_processed_sparse.bin") {
-  printf("Open %s \n", filename);
-  FILE *pf = fopen(filename, "rb");
-  if (!pf) {
-    printf("%s not found!\n", filename);
-    exit(-1);
-  }
-
-  vector<uint32_t> vec;
-  double ftime = -1;
-  char trace[30];
-  while (fread(trace, 1, 21, pf)) {
-    uint32_t tkey = *(uint32_t *)(trace);
-    vec.push_back(tkey);
-  }
-  fclose(pf);
-  return vec;
-}
-
 extern "C" {
     int ins[16384], que[16384];
     
@@ -76,6 +57,21 @@ extern "C" {
                     cout << bucket[key].val[i] << " " << bucket[key].cnt[i] << " " << bucket[key].dic[i] << endl;
                 }
             }
+        }
+        void update() {
+            while(!hot_id.empty()) hot_id.pop();
+            bool *v = new bool[s];
+            memset(v, 0, sizeof(v));
+            for (int key = 0; key < s; ++key) {
+                for (int i = 0; i < 4; ++i) {
+                    if (bucket[key].dic[i])
+                        v[bucket[key].dic[i]] = true;
+                }
+            }
+            for (int i = 1; i < lim; ++i) {
+                if (!v[i]) hot_id.push(i);
+            }
+            delete[] v;
         }
         void update() {
             while(!hot_id.empty()) hot_id.pop();
@@ -173,7 +169,7 @@ extern "C" {
         int k, n;
         float** cnt;
         int* Key;
-        CUsketch(int k = 20, int n = 97):k(k), n(n){
+        CUsketch(int k = 200, int n = 97):k(k), n(n){
             cnt = new float*[k];
             Key = new int[k];
             for (int i = 0; i < k; ++i){
