@@ -28,7 +28,19 @@ Our implementation builds upon DLRM repo: https://github.com/facebookresearch/dl
      ./bench/criteo_terabyte.sh
      ```
 
-3. The code provides three models to train the dataset:
+3. The code also supports another two datasets [Avazu](https://kaggle.com/competitions/avazu-ctr-prediction) and [KDD12](https://kaggle.com/competitions/kddcup2012-track2).
+   - Please do the following to prepare the dataset for use with this code:
+     - Ensure that the feature count for each field is independent.
+     - Set the parameters cat_path, dense_path, label_path and count_path in the script.
+
+   - The model can be trained using the following script
+
+     ```
+     ./bench/avazu.sh
+     ./bench/kdd12.sh
+     ```
+
+4. The code provides three models to train the dataset:
    - dlrm:
 
      ```
@@ -45,7 +57,7 @@ Our implementation builds upon DLRM repo: https://github.com/facebookresearch/dl
      ./bench/dcn.sh
      ```
 
-4. The code provides six methods for generating embedding layers:
+5. The code provides six methods for generating embedding layers:
 
    - Full embedding with the following script
 
